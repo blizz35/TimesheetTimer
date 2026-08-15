@@ -8,6 +8,9 @@ customizable from Preferences):
   Ctrl+Alt+T  -> open a popup to type an account name and start the timer
                  (automatically stops/banks whatever was running before)
   Ctrl+Alt+S  -> stop the current timer (banks its elapsed time)
+                 (automatically outputs the current timer to CSV)
+  Ctrl+Alt+O  -> resets the position of the timer to the default corner selected in the settings
+                 (also saves that positioning for future reloads)
 
 Right-click the overlay for a menu (new task / stop / save CSV / open CSV /
 preferences / quit).
@@ -49,7 +52,8 @@ import subprocess
 import sys
 from datetime import timedelta
 
-import keyboard  
+import keyboard
+from enum import auto
 
 # import win32gui
 # from pyWinActivate import win_activate
@@ -58,22 +62,22 @@ import keyboard
 # Sanity check: make sure we actually got the real `keyboard` package and not
 # some other module/file named `keyboard` shadowing it (e.g. a local
 # keyboard.py sitting next to this script, or in the current directory).
-_required_attrs = ("add_hotkey", "unhook_all", "read_hotkey")
-_missing = [a for a in _required_attrs if not hasattr(keyboard, a)]
-if _missing:
-    raise ImportError(
-        "The 'keyboard' module that got imported is missing "
-        f"{_missing} — this isn't the real PyPI 'keyboard' package.\n"
-        f"Loaded from: {getattr(keyboard, '__file__', '<unknown>')}\n"
-        "Check for a local file or folder named 'keyboard.py' / 'keyboard/' "
-        "in this script's directory or your current working directory that "
-        "might be shadowing the installed package, then run:\n"
-        "    pip install --upgrade keyboard"
-    )
+# _required_attrs = ("add_hotkey", "unhook_all", "read_hotkey")
+# _missing = [a for a in _required_attrs if not hasattr(keyboard, a)]
+# if _missing:
+#     raise ImportError(
+#         "The 'keyboard' module that got imported is missing "
+#         f"{_missing} — this isn't the real PyPI 'keyboard' package.\n"
+#         f"Loaded from: {getattr(keyboard, '__file__', '<unknown>')}\n"
+#         "Check for a local file or folder named 'keyboard.py' / 'keyboard/' "
+#         "in this script's directory or your current working directory that "
+#         "might be shadowing the installed package, then run:\n"
+#         "    pip install --upgrade keyboard"
+#     )
 
 CSV_FILE = "timesheet.csv"
 CONFIG_FILE = "timesheet_config.json"
-AUTOSAVE_INTERVAL_SEC = 60
+DEFAULT_AUTOSAVE_INTERVAL_SEC = 60
 
 OVERLAY_WIDTH = 220
 OVERLAY_HEIGHT = 70
@@ -94,6 +98,8 @@ DEFAULT_APPEARANCE = {
     "pos_y": None,
     "hotkey_open": "ctrl+alt+t",
     "hotkey_stop": "ctrl+alt+s",
+    "hotkey_reset": "ctrl+alt+o",
+    "autosave_interval_sec": 60
 }
 
 
@@ -104,6 +110,7 @@ class TimesheetApp:
         self.current_start = None
         self.hotkey_queue = queue.Queue()
         self.appearance = self._load_appearance()
+        self.autosave_interval = self.set_autosave_interval(self.appearance.get("autosave_interval_sec"))
 
         # --- Overlay window ---
         self.root = tk.Tk()
@@ -179,6 +186,10 @@ class TimesheetApp:
             self.appearance.get("hotkey_stop", DEFAULT_APPEARANCE["hotkey_stop"]),
             lambda: self.hotkey_queue.put("stop"),
         )
+        keyboard.add_hotkey(
+            self.appearance.get("hotkey_reset", DEFAULT_APPEARANCE["hotkey_reset"]),
+            lambda: self.hotkey_queue.put("reset"),
+        )
 
     def _check_hotkey_queue(self):
         try:
@@ -188,6 +199,9 @@ class TimesheetApp:
                     self.open_popup()           
                 elif cmd == "stop":
                     self.stop_timer()
+                    self.save_csv()
+                elif cmd == "reset":
+                    self.reset_timer()
         except queue.Empty:
             pass
         self.root.after(150, self._check_hotkey_queue)
@@ -375,6 +389,7 @@ class TimesheetApp:
         # ---- Hotkeys ----
         open_hk_var = tk.StringVar(value=temp.get("hotkey_open", DEFAULT_APPEARANCE["hotkey_open"]))
         stop_hk_var = tk.StringVar(value=temp.get("hotkey_stop", DEFAULT_APPEARANCE["hotkey_stop"]))
+        reset_hk_var = tk.StringVar(value=temp.get("hotkey_reset", DEFAULT_APPEARANCE["hotkey_reset"]))
 
         def record_hotkey(var, button):
             button.config(text="Press keys...", state="disabled")
@@ -416,9 +431,37 @@ class TimesheetApp:
         stop_hk_btn.config(command=lambda: record_hotkey(stop_hk_var, stop_hk_btn))
         stop_hk_btn.grid(row=row, column=2, padx=(0, 10))
         row += 1
+        
+        tk.Label(dlg, text="Reset position hotkey").grid(row=row, column=0, sticky="w", padx=10, pady=6)
+        reset_hk_entry = tk.Entry(dlg, textvariable=reset_hk_var, width=18)
+        reset_hk_entry.grid(row=row, column=1, sticky="w")
+        reset_hk_btn = tk.Button(dlg, text="Record")
+        reset_hk_btn.config(command=lambda: record_hotkey(reset_hk_var, reset_hk_btn))
+        reset_hk_btn.grid(row=row, column=2, padx=(0, 10))
+        row += 1
 
         tk.Label(
             dlg, text="Type a combo like ctrl+alt+t, or click Record and press the keys.",
+            font=("Segoe UI", 8), fg="#666666",
+        ).grid(row=row, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 6))
+        row += 1
+        
+        ttk.Separator(dlg, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", padx=10, pady=(4, 4)
+        )
+        row += 1
+        
+        # ---- Autosave Timing ----
+        
+        autosave_time_var = tk.StringVar(value = temp.get("autosave_interval_sec", DEFAULT_APPEARANCE["autosave_interval_sec"]))
+        
+        tk.Label(dlg, text="Timer autosave interval").grid(row=row, column=0, sticky="w", padx=10, pady=6)
+        autosave_time_entry = tk.Entry(dlg, textvariable=autosave_time_var, width=4)
+        autosave_time_entry.grid(row=row, column=1, sticky="w")
+        row += 1
+        
+        tk.Label(
+            dlg, text="Enter a number of seconds for the autosave interval.\nAnything other than a number resets the value to default (60)",
             font=("Segoe UI", 8), fg="#666666",
         ).grid(row=row, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 6))
         row += 1
@@ -431,14 +474,21 @@ class TimesheetApp:
             temp["corner"] = corner_var.get()
             temp["hotkey_open"] = open_hk_var.get().strip()
             temp["hotkey_stop"] = stop_hk_var.get().strip()
-
+            temp["hotkey_reset"] = reset_hk_var.get().strip()
+            if isinstance(autosave_time_entry.get(), int):
+                temp["autosave_interval_sec"] = autosave_time_entry.get()
+            else:                
+                temp["autosave_interval_sec"] = DEFAULT_AUTOSAVE_INTERVAL_SEC
+            
         def apply_preview():
             gather_and_preview()
             previous_hotkeys = (
                 self.appearance.get("hotkey_open"),
                 self.appearance.get("hotkey_stop"),
+                self.appearance.get("hotkey_reset")
             )
             self.appearance = dict(temp)
+            self.autosave_update(int(temp["autosave_interval_sec"]))
             self._apply_appearance()
             self.move_to_corner(self.appearance["corner"])
             try:
@@ -449,11 +499,12 @@ class TimesheetApp:
                     f"Couldn't set that hotkey combination:\n{e}\n\nReverting to the previous hotkeys.",
                     parent=dlg,
                 )
-                self.appearance["hotkey_open"], self.appearance["hotkey_stop"] = previous_hotkeys
+                self.appearance["hotkey_open"], self.appearance["hotkey_stop"], self.appearance["hotkey_reset"] = previous_hotkeys
                 open_hk_var.set(previous_hotkeys[0])
                 stop_hk_var.set(previous_hotkeys[1])
+                reset_hk_var.set(previous_hotkeys[2])
                 self._register_hotkeys()
-
+                
         def save_and_close():
             apply_preview()
             self._save_appearance()
@@ -471,6 +522,9 @@ class TimesheetApp:
             corner_var.set(temp["corner"])
             open_hk_var.set(temp["hotkey_open"])
             stop_hk_var.set(temp["hotkey_stop"])
+            reset_hk_var.set(temp["hotkey_reset"])
+            autosave_time_var.set(temp["autosave_interval_sec"])
+            
             apply_preview()
 
         btn_frame = tk.Frame(dlg)
@@ -537,7 +591,19 @@ class TimesheetApp:
 
     def _autosave_loop(self):
         self.save_csv()
-        self.root.after(AUTOSAVE_INTERVAL_SEC * 1000, self._autosave_loop)
+        self.root.after(self.autosave_interval * 1000, self._autosave_loop)
+    
+    def autosave_update(self, sec):
+        self.autosave_interval = self.set_autosave_interval(sec)
+                
+    def set_autosave_interval(self, sec):
+        if sec == 0:
+            sec = DEFAULT_AUTOSAVE_INTERVAL_SEC
+        
+        self.appearance.update({"autosave_interval_sec": sec})
+        
+        self._save_appearance()
+        return sec
 
     def quit_app(self):
         self.stop_timer()
@@ -547,6 +613,10 @@ class TimesheetApp:
 
     def run(self):
         self.root.mainloop()
+        
+    def reset_timer(self):
+        self.move_to_corner(self.appearance.get("corner"))
+        self._save_appearance()
 
 
 if __name__ == "__main__":
