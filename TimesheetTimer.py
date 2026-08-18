@@ -28,9 +28,6 @@ automatically next run.
 On quit (or every 60s autosave), writes all accounts and their total time
 to a CSV file (default: timesheet.csv, next to this script).
 
-Install dependencies:
-    pip install keyboard
-
 Notes:
   - On Windows, global hotkeys via the `keyboard` package usually need the
     script to be run as Administrator.
@@ -51,29 +48,11 @@ import os
 import subprocess
 import sys
 from datetime import timedelta
+from infi.systray import SysTrayIcon
 
 import keyboard
+from infi.systray.traybar import SysTrayIcon
 from enum import auto
-
-# import win32gui
-# from pyWinActivate import win_activate
-# import pyautogui
-
-# Sanity check: make sure we actually got the real `keyboard` package and not
-# some other module/file named `keyboard` shadowing it (e.g. a local
-# keyboard.py sitting next to this script, or in the current directory).
-# _required_attrs = ("add_hotkey", "unhook_all", "read_hotkey")
-# _missing = [a for a in _required_attrs if not hasattr(keyboard, a)]
-# if _missing:
-#     raise ImportError(
-#         "The 'keyboard' module that got imported is missing "
-#         f"{_missing} — this isn't the real PyPI 'keyboard' package.\n"
-#         f"Loaded from: {getattr(keyboard, '__file__', '<unknown>')}\n"
-#         "Check for a local file or folder named 'keyboard.py' / 'keyboard/' "
-#         "in this script's directory or your current working directory that "
-#         "might be shadowing the installed package, then run:\n"
-#         "    pip install --upgrade keyboard"
-#     )
 
 CSV_FILE = "timesheet.csv"
 CONFIG_FILE = "timesheet_config.json"
@@ -105,7 +84,7 @@ DEFAULT_APPEARANCE = {
 
 class TimesheetApp:
     def __init__(self):
-        self.accounts = {}          # account name -> accumulated seconds (float)
+        self.accounts = self.check_csv()        
         self.current_account = None
         self.current_start = None
         self.hotkey_queue = queue.Queue()
@@ -155,6 +134,24 @@ class TimesheetApp:
         self._update_clock()
         self._check_hotkey_queue()
         self._autosave_loop()
+        self.systray_setup()
+        
+        # if the window is off screen at boot (started on a smaller screen than when it was closed)
+        # this resets the location to the selected corner
+        if self.appearance["pos_x"] > self.root.winfo_screenwidth() or self.appearance["pos_y"] > self.root.winfo_screenheight():
+            self.reset_timer()
+        
+    def systray_setup(self):
+        menu_options = (("Preferences", None, lambda event: self.open_tray_preferences(event)),)
+        systray = SysTrayIcon("vincueblack.ico", "TimesheetTimer", menu_options, on_quit=lambda event: self.on_quit_callback(event))
+        systray.start()
+        
+    def on_quit_callback(self, event):
+        self.quit_app()
+        
+        
+    def open_tray_preferences(self, event):
+        self.open_preferences()
 
     # ---------- window dragging ----------
     def _start_move(self, event):
@@ -475,9 +472,9 @@ class TimesheetApp:
             temp["hotkey_open"] = open_hk_var.get().strip()
             temp["hotkey_stop"] = stop_hk_var.get().strip()
             temp["hotkey_reset"] = reset_hk_var.get().strip()
-            if isinstance(autosave_time_entry.get(), int):
-                temp["autosave_interval_sec"] = autosave_time_entry.get()
-            else:                
+            try:
+                temp["autosave_interval_sec"] = int(autosave_time_entry.get())
+            except:               
                 temp["autosave_interval_sec"] = DEFAULT_AUTOSAVE_INTERVAL_SEC
             
         def apply_preview():
@@ -562,6 +559,23 @@ class TimesheetApp:
         self.root.after(500, self._update_clock)
 
     # ---------- CSV export ----------
+    def check_csv(self):
+        
+        accountDict = {}
+        if os.path.exists(CSV_FILE):
+            with open(CSV_FILE, "r") as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if row[0] == 'account':
+                        continue
+                    else:
+                        foo = row[0]
+                        bar = row[1]
+                        accountDict[foo] = float(bar)
+        else:
+            self.save_csv()        
+        return accountDict
+        
     def save_csv(self):
         # Include currently-running elapsed time without stopping the timer
         snapshot = dict(self.accounts)
@@ -591,6 +605,8 @@ class TimesheetApp:
 
     def _autosave_loop(self):
         self.save_csv()
+        if self.appearance["pos_x"] > self.root.winfo_screenwidth() or self.appearance["pos_y"] > self.root.winfo_screenheight():
+            self.reset_timer()
         self.root.after(self.autosave_interval * 1000, self._autosave_loop)
     
     def autosave_update(self, sec):
@@ -608,9 +624,8 @@ class TimesheetApp:
     def quit_app(self):
         self.stop_timer()
         self.save_csv()
-        keyboard.unhook_all()
-        self.root.destroy()
-
+        os._exit(0)
+        
     def run(self):
         self.root.mainloop()
         
