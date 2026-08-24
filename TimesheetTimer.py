@@ -49,12 +49,13 @@ import subprocess
 import sys
 from datetime import timedelta
 from infi.systray import SysTrayIcon
+from datetime import datetime
+from pathlib import Path
 
 import keyboard
 from infi.systray.traybar import SysTrayIcon
-from enum import auto
 
-CSV_FILE = "timesheet.csv"
+CSV_FILE = "timesheet_" + datetime.today().strftime('%m-%d-%y') + ".csv"
 CONFIG_FILE = "timesheet_config.json"
 DEFAULT_AUTOSAVE_INTERVAL_SEC = 60
 
@@ -84,12 +85,14 @@ DEFAULT_APPEARANCE = {
 
 class TimesheetApp:
     def __init__(self):
-        self.accounts = self.check_csv()        
+        self.accounts = {}    
         self.current_account = None
         self.current_start = None
         self.hotkey_queue = queue.Queue()
         self.appearance = self._load_appearance()
         self.autosave_interval = self.set_autosave_interval(self.appearance.get("autosave_interval_sec"))
+        self.csvPath = self.get_dir()
+        self.accounts = self.check_csv()
 
         # --- Overlay window ---
         self.root = tk.Tk()
@@ -138,17 +141,38 @@ class TimesheetApp:
         
         # if the window is off screen at boot (started on a smaller screen than when it was closed)
         # this resets the location to the selected corner
-        if self.appearance["pos_x"] > self.root.winfo_screenwidth() or self.appearance["pos_y"] > self.root.winfo_screenheight():
+        # if type(self.appearance["pos_x"]) == None or type(self.appearance["pos_y"]) == None:
+        #     self.reset_timer()  
+        try:
+            if self.appearance["pos_x"] > self.root.winfo_screenwidth() or self.appearance["pos_y"] > self.root.winfo_screenheight():
+                self.reset_timer()
+        except:
             self.reset_timer()
+
         
     def systray_setup(self):
-        menu_options = (("Preferences", None, lambda event: self.open_tray_preferences(event)),)
-        systray = SysTrayIcon("vincueblack.ico", "TimesheetTimer", menu_options, on_quit=lambda event: self.on_quit_callback(event))
+        menu_options = (("New Task", None, lambda event: self.open_tray_popup(event)),
+                        ("Stop Timer", None, lambda event: self.stop_tray_timer(event)),
+                        ("Save CSV Now", None, lambda event: self.save_tray_csv(event)),
+                        ("Open CSV Now", None, lambda event: self.open_tray_csv(event)),
+                        ("Preferences", None, lambda event: self.open_tray_preferences(event)),)
+        systray = SysTrayIcon(self.resource("vincueblacktimer.ico"), "TimesheetTimer", menu_options, on_quit=lambda event: self.on_quit_callback(event))
         systray.start()
         
     def on_quit_callback(self, event):
         self.quit_app()
         
+    def open_tray_popup(self, event):
+        self.open_popup()        
+    
+    def stop_tray_timer(self, event):
+        self.stop_timer()
+        
+    def save_tray_csv(self, event):
+        self.save_csv()
+    
+    def open_tray_csv(self, event):
+        self.open_csv()
         
     def open_tray_preferences(self, event):
         self.open_preferences()
@@ -536,10 +560,25 @@ class TimesheetApp:
     # ---------- timer logic ----------
     def start_timer(self, name):
         self.stop_timer()  # bank whatever was running
-        self.current_account = name
-        self.current_start = time.time()
-        self.accounts.setdefault(name, 0.0)
-        self.account_label.config(text=name)
+        if len(self.accounts) > 0:
+            for key in self.accounts.keys():
+                if name == key:
+                    self.current_account = key
+                    self.current_start = time.time() - self.accounts[key]
+                    self.accounts.setdefault(key, self.accounts[key])
+                    self.account_label.config(text=key)
+                    break
+                else:
+                    self.current_account = name
+                    self.current_start = time.time()
+                    self.accounts.setdefault(name, 0.0)
+                    self.account_label.config(text=name)
+                    break
+        else:
+            self.current_account = name
+            self.current_start = time.time()
+            self.accounts.setdefault(name, 0.0)
+            self.account_label.config(text=name)
 
     def stop_timer(self):
         if self.current_account and self.current_start:
@@ -554,16 +593,24 @@ class TimesheetApp:
 
     def _update_clock(self):
         if self.current_account and self.current_start:
-            elapsed = time.time() - self.current_start
+            elapsed = time.time() - self.current_start + self.accounts[self.current_account]
             self.time_label.config(text=str(timedelta(seconds=int(elapsed))))
         self.root.after(500, self._update_clock)
 
-    # ---------- CSV export ----------
-    def check_csv(self):
+    # ---------- CSV export ----------    
+    def resource(self, relativePath):
+            basePath = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+            return os.path.join(basePath, relativePath)
+
+    def get_dir(self):
+        Path('Timesheets').mkdir(parents=False, exist_ok=True)
         
+        return Path('Timesheets')
+    
+    def check_csv(self):        
         accountDict = {}
-        if os.path.exists(CSV_FILE):
-            with open(CSV_FILE, "r") as f:
+        if os.path.exists(str(self.csvPath) + '\\' + CSV_FILE):
+            with open(str(self.csvPath) + '\\' + CSV_FILE, "r") as f:
                 reader = csv.reader(f)
                 for row in reader:
                     if row[0] == 'account':
@@ -583,7 +630,7 @@ class TimesheetApp:
             elapsed = time.time() - self.current_start
             snapshot[self.current_account] = snapshot.get(self.current_account, 0.0) + elapsed
 
-        with open(CSV_FILE, "w", newline="") as f:
+        with open(str(self.csvPath) + '\\' + CSV_FILE, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["account", "total_seconds", "total_hms"])
             for name, secs in sorted(snapshot.items()):
@@ -591,22 +638,20 @@ class TimesheetApp:
 
     def open_csv(self):
         # Make sure there's an up-to-date file to open
-        if not os.path.exists(CSV_FILE):
+        if not os.path.exists(str(self.csvPath) + '\\' + CSV_FILE):
             self.save_csv()
         try:
             if sys.platform.startswith("win"):
-                os.startfile(CSV_FILE)  # noqa: only exists on Windows
+                os.startfile(str(self.csvPath) + '\\' + CSV_FILE)  # noqa: only exists on Windows
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", CSV_FILE])
+                subprocess.Popen(["open", self.csvPath + '\\' + CSV_FILE])
             else:
-                subprocess.Popen(["xdg-open", CSV_FILE])
+                subprocess.Popen(["xdg-open", self.csvPath + '\\' + CSV_FILE])
         except OSError:
-            pass  # no associated app found; silently ignore
+            pass
 
     def _autosave_loop(self):
         self.save_csv()
-        if self.appearance["pos_x"] > self.root.winfo_screenwidth() or self.appearance["pos_y"] > self.root.winfo_screenheight():
-            self.reset_timer()
         self.root.after(self.autosave_interval * 1000, self._autosave_loop)
     
     def autosave_update(self, sec):

@@ -1,0 +1,1 @@
+py -m PyInstaller -w --onefile --add-data vincueblacktimer.ico:. --icon=vincueblacktimer.ico --name "Timesheet Timer" TimesheetTimer.py
