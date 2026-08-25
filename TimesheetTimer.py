@@ -137,6 +137,7 @@ class TimesheetApp:
         self._update_clock()
         self._check_hotkey_queue()
         self._autosave_loop()
+        self._check_day()
         self.systray_setup()
         
         # if the window is off screen at boot (started on a smaller screen than when it was closed)
@@ -598,6 +599,11 @@ class TimesheetApp:
         self.root.after(500, self._update_clock)
 
     # ---------- CSV export ----------    
+    def checkDate(self):
+        if CSV_FILE != 'timesheet_' + datetime.today().strftime('%m-%d-%y') + ".csv":
+            self.CSV_FILE = 'timesheet_' + datetime.today().strftime('%m-%d-%y') + ".csv"
+            self.save_csv()        
+        
     def resource(self, relativePath):
             basePath = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
             return os.path.join(basePath, relativePath)
@@ -653,6 +659,11 @@ class TimesheetApp:
     def _autosave_loop(self):
         self.save_csv()
         self.root.after(self.autosave_interval * 1000, self._autosave_loop)
+    
+    def _check_day(self):
+        if 0 < int(time.strftime("%H")) < 12:
+            self.checkDate()
+        self.root.after(21600000, self._check_day)
     
     def autosave_update(self, sec):
         self.autosave_interval = self.set_autosave_interval(sec)
