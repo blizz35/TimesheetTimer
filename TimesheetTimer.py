@@ -55,7 +55,8 @@ from pathlib import Path
 import keyboard
 from infi.systray.traybar import SysTrayIcon
 
-CSV_FILE = "timesheet_" + datetime.today().strftime('%m-%d-%y') + ".csv"
+# CSV_FILE = "timesheet_" + datetime.today().strftime('%m-%d-%y') + ".csv"
+CSV_FILE = "timesheet_08-26-2026.csv"
 CONFIG_FILE = "timesheet_config.json"
 DEFAULT_AUTOSAVE_INTERVAL_SEC = 60
 
@@ -567,19 +568,19 @@ class TimesheetApp:
                     self.current_account = key
                     self.current_start = time.time() - self.accounts[key]
                     self.accounts.setdefault(key, self.accounts[key])
-                    self.account_label.config(text=key)
+                    # self.account_label.config(text=key)
                     break
-                else:
-                    self.current_account = name
-                    self.current_start = time.time()
-                    self.accounts.setdefault(name, 0.0)
-                    self.account_label.config(text=name)
-                    break
-        else:
-            self.current_account = name
-            self.current_start = time.time()
-            self.accounts.setdefault(name, 0.0)
-            self.account_label.config(text=name)
+                # else:
+                    # self.current_account = name
+                    # self.current_start = time.time()
+                    # self.accounts.setdefault(name, 0.0)
+                    # self.account_label.config(text=name)
+                    # break
+        # else:
+        self.current_account = name
+        self.current_start = time.time()
+        self.accounts.setdefault(name, 0.0)
+        self.account_label.config(text=name)
 
     def stop_timer(self):
         if self.current_account and self.current_start:
@@ -591,7 +592,6 @@ class TimesheetApp:
         self.current_start = None
         self.account_label.config(text="No active task")
         self.time_label.config(text="00:00:00")
-
     def _update_clock(self):
         if self.current_account and self.current_start:
             elapsed = time.time() - self.current_start + self.accounts[self.current_account]
@@ -600,8 +600,9 @@ class TimesheetApp:
 
     # ---------- CSV export ----------    
     def checkDate(self):
+        global CSV_FILE
         if CSV_FILE != 'timesheet_' + datetime.today().strftime('%m-%d-%y') + ".csv":
-            self.CSV_FILE = 'timesheet_' + datetime.today().strftime('%m-%d-%y') + ".csv"
+            CSV_FILE = 'timesheet_' + datetime.today().strftime('%m-%d-%y') + ".csv"
             self.save_csv()        
         
     def resource(self, relativePath):
@@ -632,6 +633,7 @@ class TimesheetApp:
     def save_csv(self):
         # Include currently-running elapsed time without stopping the timer
         snapshot = dict(self.accounts)
+        self.checkDate()
         if self.current_account and self.current_start:
             elapsed = time.time() - self.current_start
             snapshot[self.current_account] = snapshot.get(self.current_account, 0.0) + elapsed
